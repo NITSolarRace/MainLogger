@@ -18,6 +18,19 @@ lcd表示のmotorSpeedをmotorSpeed_pulseに変更624行目（lcd :: can速度→パルス速度）
  *ファンなんて強弱変えないので削除
  *パルス速度は使わない方針で考えています
  */
+ /*2019_9_15
+ 
+ 貫通型電流センサーのINA２２６のプログラム修正
+ グローバル変数vAl[]に補正値（LCDに表示する値）をいれたがdata->realtimeata[][]には反映されていない模様
+ LCD更新の時間が長い事象が発生なう*
+ */
+/*
+* 2019/09/21
+* CAN通信　BMS　バッテリエラー表示対応
+* BMSからバッテリ異常情報・合計電圧、最小電圧、最大電圧のフレーム１秒間隔で送信
+* 受信割り込みで処理　DisplayBMSError()
+* SOLARLOGGER保存用プログラムコメントアウト
+*/
 
 #include "mbed.h"
 #include "INA226.hpp"
@@ -25,34 +38,33 @@ lcd表示のmotorSpeedをmotorSpeed_pulseに変更624行目（lcd :: can速度→パルス速度）
 #include "MSCFileSystem.h"
 #include "RTC.h"
 #include "MBed_Adafruit_GPS.h"
-// #include "MITSUBA_CAN.h"
 
 // INA226用I2Cアドレス I2Cアドレスはmbedの場合1ビット左シフトしたアドレスになる
 const int BATTERY_MONITOR_ADDRESS = 0x80;         // 0b10000000 (GG)
+const int BATTERY_MON2_ADDRESS = 0x94;             // 0b10010100 (DD) 
 const int PANEL_MONITOR_ADDRESS = 0x82;           // 0b10000010 (G1)
 const int MOTOR_MONITOR_ADDRESS = 0x9E;           // 0b10011110 (CC)
 const unsigned short INA226_CONFIG = 0x4897;    // 平均化処理やタイミング
 
 /*------------------------------設定変更厳禁------------------------------*/
-const double VOLTAGE_CALIB = 10 * 1.0016;         // 分圧比(10倍に補正)
+// const double VOLTAGE_CALIB = 10 * 1.0016;         // 分圧比(10倍に補正)
 const double MITSUBA_VOLTAGE_CALIB = 0.93396;     // ミツバCANlogger 電圧補正 誤差0.7%程度へ
-const unsigned short INA226_CALIB = 0xF00;      // シャント電圧補正係数
-const unsigned short INA226_CALIB_PANEL = 0x3555; // シャント電圧補正係数（パネル）
-const double currentCalibration[] = {2.00, 0.375, 2.00};
+// const unsigned short INA226_CALIB = 0xF00;      // シャント電圧補正係数
+// const unsigned short INA226_CALIB_PANEL = 0x3555; // シャント電圧補正係数（パネル）
+// const double currentCalibration[] = {2.00, 0.375, 2.00};
 // [0]: バッテリ [1]: パネル [2]: モータ
 /*------------------------------設定変更厳禁------------------------------*/
 const double BATTERY_CAPACITY = 3.6 * 3.45 * 26 * 16;       // 公称電圧*電流容量*直列数*並列数
 const double MOTOR_OVER_TEMP = 150;  // コイル温度150℃で過温度
 
-const int OFFSET_TIME = 60 * 60 * 9;     // 9時間(標準時との時差) = 日本時間
-//const int OFFSET_TIME = 60 * 60 * 9.5;     // ダーウィン時間
-const int STORAGE_TIME = 1;             // 10秒間隔送信
+// const int OFFSET_TIME = 60 * 60 * 9;     // 9時間(標準時との時差) = 日本時間
+const int OFFSET_TIME = 60 * 60 * 9.5;     // ダーウィン時間
+const int STORAGE_TIME = 1;             // 1秒間隔Xbee送信
 
 const double NOTS_CONVERT = 1.852;    // 1ノット = 1.852 km/h
 const double RPM_CONVERT = 0.104399;  // rpm -> km/h 変換係数
 const double RPM_CONVERT_MS = 0.028955;     // rpm -> m/s 変換係数
 //const double pulseConvert = 0.1303;     // 車速パルス -> 速度変換係数  1[pulse/sec]÷48[pulse/回転数]×直径0.553[m]×3.14159265×3.6[sec・km/m]
-
 
 /*各配列要素数*/
 const int RealtimeData_i = 3;  // [0]: バッテリ [1]: パネル [2]: モータ
@@ -65,10 +77,11 @@ const int TIME_MAX = 32;
 const int FILE_NAME_MAX = 32;
 
 // ヘッダー
-const char USB_HEADER_STRING[] = "Time,TotalNoon[s],B[V],B[A],S[A],M[A],B[Wh],S[Wh],M[Wh],Remain[Wh],Mspeed[km/h],GPSspeed[km/h],gpsAngle,distance[km],MotorTemp";
+const char USB_HEADER_STRING[] = "Time,timeNoon[s],B[V],B[A],S[A],M[A],B[Wh],S[Wh],M[Wh],Remain[Wh],Mspeed[km/h],GPSspeed[km/h],gpsAngle,distance[km],MotorTemp";
 const char HEADER_CAN_MITSUBA[] = "Time,timeNoon[s],voltage,current,FET,RPM,duty,angle";
-const char HEADER_CAN_SOLAR[] = "Time,timeNoon[s],MPPT_V1,MPPT_V2,MPPT_V3,MPPT_V4,MPPT_V5,MPPT_V6,MPPT_V7,MPPT_V8,MPPT_V9,MPPT_V10,MPPT_V11,MPPT_V12,MPPT_I1,MPPT_I2,MPPT_I3,MPPT_I4,MPPT_I5,MPPT_I6,MPPT_I7,MPPT_I8,MPPT_I9,MPPT_I10,MPPT_I11,MPPT_I12,MPPT_P1,MPPT_P2,MPPT_P3,MPPT_P4,MPPT_P5,MPPT_P6,MPPT_P7,MPPT_P8,MPPT_P9,MPPT_P10,MPPT_P11,MPPT_P12, T1,T2,T3,T4,T5,T6,T7,T8,T9,T10,T11,T12,T13,T14,T15,T16";
-const char HEADER_CAN_BMS[] = "Time,timeNoon[s],sum,c1,c2,c3,c4,c5,c6,c7,c8,c9,c10,c11,c12,c13,c14,c15,c16,c17,c18,c19,c20,c21,c22,c23,c24,c25,c26,c27,c28";
+// const char HEADER_CAN_SOLAR[] = "Time,timeNoon[s],MPPT_V1,MPPT_V2,MPPT_V3,MPPT_V4,MPPT_V5,MPPT_V6,MPPT_V7,MPPT_V8,MPPT_V9,MPPT_V10,MPPT_V11,MPPT_V12,MPPT_I1,MPPT_I2,MPPT_I3,MPPT_I4,MPPT_I5,MPPT_I6,MPPT_I7,MPPT_I8,MPPT_I9,MPPT_I10,MPPT_I11,MPPT_I12,MPPT_P1,MPPT_P2,MPPT_P3,MPPT_P4,MPPT_P5,MPPT_P6,MPPT_P7,MPPT_P8,MPPT_P9,MPPT_P10,MPPT_P11,MPPT_P12, T1,T2,T3,T4,T5,T6,T7,T8,T9,T10,T11,T12,T13,T14,T15,T16";
+// const char HEADER_CAN_BMS[] = "Time,timeNoon[s],sum,c1,c2,c3,c4,c5,c6,c7,c8,c9,c10,c11,c12,c13,c14,c15,c16,c17,c18,c19,c20,c21,c22,c23,c24,c25,c26,c27,c28";
+const char HEADER_CAN_BMS[] = "Time,timeNoon[s],sum,min,max";
 
 Serial debug(USBTX, USBRX);
 Serial Xbee(p13, p14);
@@ -84,11 +97,12 @@ I2C i2c(p9, p10);  // sda, scl
 INA226 BatteryMonitor(i2c, BATTERY_MONITOR_ADDRESS, 10000);
 INA226 PanelMonitor(i2c, PANEL_MONITOR_ADDRESS, 10000);
 INA226 MotorMonitor(i2c, MOTOR_MONITOR_ADDRESS, 10000);
+INA226 BatteryMonitor2(i2c, BATTERY_MON2_ADDRESS, 10000);
 
 MSCFileSystem msc("usb");  // USBメモリには/usb/...でアクセス
 
 AnalogIn motorTempAnalogIn(p19);  // モータコイル温度
-//InterruptIn motorPulse(p12);      // モーターパルス(ピン設定)
+//I nterruptIn motorPulse(p12);      // モーターパルス(ピン設定)
 
 
 struct LogData {
@@ -130,7 +144,7 @@ struct LogData {
   double sumBatteryVoltage;   // BMS合計バッテリセル電圧
   double minCellVoltage;      // 最小セル電圧
   double maxCellVoltage;      // 最大セル電圧
-  double cellVoltage[28];     // 全セル電圧
+  // double cellVoltage[28];     // 全セル電圧
 };
 
 bool secTimer = false;
@@ -138,7 +152,14 @@ struct LogData logdata = {0};
 time_t startGPSTime = 0;
 unsigned int storageCount = 0;
 // unsigned int pulseCount = 0;     // 車速パルスカウント変数
+bool BMSConnectFlag = false;        // BMS通信成功フラグ
+bool BMSErrorFlag = false;                // BMSエラーフラグ
+bool BMSErrorFlagOverDischarge = false;   // 過放電フラグ
+bool BMSErrorFlagOverCharge = false;  // 過充電フラグ
+bool BMSErrorFlagOverTemp = false;    // 過温度フラグ
+bool BMSErrorFlagLowTemp = false;     // 過低温フラグ
 
+/*プロトタイプ宣言*/
 void print(const char *str, int row, int col);
 int SetupINA226(void);
 void SetupTime(void);
@@ -156,8 +177,12 @@ int USBSaveCANData(const struct LogData *data, const char name[][FILE_NAME_MAX])
 int SaveBackup(const struct LogData *data);
 //void MotorPulseCount(void);  //車速パルスカウント関数
 void SendCANMessage(void);
-void ReceiveCANMessage(void);
+void ReceiveCANMessage(void);  // CAN受信割り込みハンドラ
 void DisplayBMSError(void);
+double MoD0(double vaLue);
+double MoD1(double vaLue);
+double MoD2(double vaLue);
+double MoD3(double vaLue);
 
 int main(){
   char fileName[5][FILE_NAME_MAX] = {0};   // USBファイル名  [0]:LOG, [1]:GPS,[2]CAN_MITSUBA, [3]:CAN_SOLAR, [4]:CAN_BMS
@@ -189,7 +214,7 @@ int main(){
   }
 
   ReadBackup(&logdata);
-  wait(1.0);
+  wait(0.5);
 
   //motorPulse.fall(&MotorPulseCount);  //ピン立ち下がり割り込みで、パルスカウント関数の実行
   //パルスで速度を見ることを考えていないなら問題ない↑
@@ -203,6 +228,7 @@ int main(){
   while(1) {
     FetchGPSdata(fileName);
     if(secTimer) {
+      secTimer = false;
       // USB保存関連 1秒ごと
       if(USBSaveData(&logdata, fileName) == -1) {
         print("USB  ERROR!", 5, 1);
@@ -219,11 +245,13 @@ int main(){
         wait(0.5);
         break;
       }
-      secTimer = false;
     }
     if(storageCount >= STORAGE_TIME) {
       storageCount = 0;
       XbeeSerial(&logdata);
+    }
+    if(BMSErrorFlag){
+      DisplayBMSError();
     }
   }
   NVIC_SystemReset();
@@ -234,7 +262,12 @@ void MainFuncTimer() {
   SendCANMessage();
   CalculateTimeSet(&logdata);
   CalculateSet(&logdata, true);
-  LCD(&logdata);
+
+  // BMS異常でないなら通常ディスプレイ表示
+  if(!BMSErrorFlag){
+    LCD(&logdata);
+  }
+  
   storageCount++;
 }
 
@@ -257,7 +290,7 @@ int SetupINA226(){
   unsigned short val_1 = 0;
   unsigned short val_2 = 0;
   unsigned short val_3 = 0;
-
+  
   // INA226の存在を確認
   if(!BatteryMonitor.isExist()) {
     print("INA226B not found!\n", 0, 0);
@@ -272,7 +305,10 @@ int SetupINA226(){
      wait(0.5);
     return -1;
   }
-
+ if(!BatteryMonitor2.isExist()) {
+    print("INA226B not found!\n", 0, 0);
+    wait(0.5);
+  }
   // INA226のレジスタの値を正しく読めるか確認
   if(BatteryMonitor.rawRead(0x00, &val_1) != 0) {
     print("INA226B read Error!\n", 0, 0);
@@ -289,14 +325,21 @@ int SetupINA226(){
     wait(0.5);
     return -1;
   }
-
+  if(BatteryMonitor2.rawRead(0x00, &val_1) != 0) {
+    print("INA226B2 read Error!\n", 0, 0);
+    wait(0.5);
+    return -1;
+}
   // 各INA226にレジスタ値を書き込む
   BatteryMonitor.setConfiguration(INA226_CONFIG);
   PanelMonitor.setConfiguration(INA226_CONFIG);
   MotorMonitor.setConfiguration(INA226_CONFIG);
+  BatteryMonitor2.setConfiguration(INA226_CONFIG);
+  
   BatteryMonitor.setCurrentCalibration(INA226_CALIB);
   PanelMonitor.setCurrentCalibration(INA226_CALIB_PANEL);
   MotorMonitor.setCurrentCalibration(INA226_CALIB);
+  BatteryMonitor2.setCurrentCalibration(INA226_CALIB);
 
   print("INA226 OK!\n", 0, 0);
   return 0;
@@ -320,7 +363,7 @@ void SetupTime(){
         continue;
       }
     }
-  } while(((!myGPS.fix) && (count < 300)));
+  } while(((!myGPS.fix) && (count < 500)));
 
   struct tm t;
   t.tm_sec = myGPS.seconds;     // 0-59
@@ -346,7 +389,7 @@ int SetupUSB(struct LogData *data, char name[][FILE_NAME_MAX]){
   strftime(name[0], FILE_NAME_MAX, "/usb/%y%m%d_log.csv", localtime(&createdTime));
   strftime(name[1], FILE_NAME_MAX, "/usb/%y%m%d_GPSNMEA.log", localtime(&createdTime));
   strftime(name[2], FILE_NAME_MAX, "/usb/%y%m%d_MITSUBA_CAN.csv", localtime(&createdTime));
-  strftime(name[3], FILE_NAME_MAX, "/usb/%y%m%d_SOLAR_CAN.csv", localtime(&createdTime));
+  // strftime(name[3], FILE_NAME_MAX, "/usb/%y%m%d_SOLAR_CAN.csv", localtime(&createdTime));
   strftime(name[4], FILE_NAME_MAX, "/usb/%y%m%d_BMS_CAN.csv", localtime(&createdTime));
 
   FILE *fp = fopen(name[0], "a");
@@ -374,18 +417,18 @@ int SetupUSB(struct LogData *data, char name[][FILE_NAME_MAX]){
   }
   fclose(fp);
 
-  fp = fopen(name[3], "a");
-  if(fp == NULL) {
-    print("USB  ERORR\n", 0, 3);
-     wait(0.5);
-    return -1;
-  }
-  else{
-    strftime(data->timeStr[0], TIME_MAX, "%Y%m%d%H%M%S", localtime(&createdTime));
-    fprintf(fp, "%s\n", data->timeStr[0]);    // 試しに現在時刻を書き込み
-    fprintf(fp, "%s\n", HEADER_CAN_SOLAR);   // ヘッダー書き込み
-  }
-  fclose(fp);
+  // fp = fopen(name[3], "a");
+  // if(fp == NULL) {
+  //   print("USB  ERORR\n", 0, 3);
+  //    wait(0.5);
+  //   return -1;
+  // }
+  // else{
+  //   strftime(data->timeStr[0], TIME_MAX, "%Y%m%d%H%M%S", localtime(&createdTime));
+  //   fprintf(fp, "%s\n", data->timeStr[0]);    // 試しに現在時刻を書き込み
+  //   fprintf(fp, "%s\n", HEADER_CAN_SOLAR);   // ヘッダー書き込み
+  // }
+  // fclose(fp);
 
   fp = fopen(name[4], "a");
   if(fp == NULL) {
@@ -501,16 +544,23 @@ void CalculateSet(struct LogData *data, bool run){
 
   double voltage_tmp = 0;      // 仮に電圧,電流データを保存しておく
   double current_tmp[RealtimeData_i] = {0};
+  double vAl[4] = {0};
 
   // 異常な値の場合は，再度データを取り直す
   do {
     retry = false;
-
-    BatteryMonitor.getVoltage(&voltage_tmp);     // 電圧
-    BatteryMonitor.getCurrent(&current_tmp[0]); // バッテリー電流
-    PanelMonitor.getCurrent(&current_tmp[1]);   // パネル電流
-    MotorMonitor.getCurrent(&current_tmp[2]);   // モーター電流
-    //data->motorSpeed_pulse = pulseCount * pulseConvert;     // 1秒間でカウントしたパルスを速度に変換
+    
+    BatteryMonitor2.getVoltage(&vAl[0]);     // バッテリー電圧
+    BatteryMonitor.getVoltage(&vAl[1]); // バッテリー電流
+    PanelMonitor.getVoltage(&vAl[2]);   // パネル電流
+    MotorMonitor.getVoltage(&vAl[3]);   // モーター電流
+    
+    current_tmp[0] = MoD1(vAl[1]);    // バッテリー電流変換後の値をcurrent_tmp[0]に代入fx0かかないと
+    current_tmp[1] = MoD2(vAl[2]);    //同上
+    current_tmp[2] = MoD3(vAl[3]);    //同上
+    voltage_tmp = MoD0(vAl[0]);       //同上
+    
+   //data->motorSpeed_pulse = pulseCount * pulseConvert;     // 1秒間でカウントしたパルスを速度に変換
    // pulseCount = 0;//パルスのリセット
    //↑パルスは使わないとしている
 
@@ -523,9 +573,9 @@ void CalculateSet(struct LogData *data, bool run){
 
   // 0割の有無を確認した後，配列に格納する
   if(data->totalTime != 0) {
-    data->batteryVoltage = voltage_tmp * VOLTAGE_CALIB; // 分圧電圧を補正
+    data->batteryVoltage = voltage_tmp; // 分圧電圧を補正
     for(int i = 0; i < RealtimeData_i; i++) {
-      data->RealtimeData[i][0] = current_tmp[i] * currentCalibration[i];  // 電流補正
+      data->RealtimeData[i][0] = current_tmp[i];  // 電流
       data->RealtimeData[i][1] = data->batteryVoltage * data->RealtimeData[i][0];   // 電力
       if(run) {
         //data->RealtimeData[i][2] += data->RealtimeData[i][0] / 3600;            // 積算電流
@@ -535,11 +585,11 @@ void CalculateSet(struct LogData *data, bool run){
       }
     }
     data->remainBatteryWh = BATTERY_CAPACITY - data->RealtimeData[0][3];     // バッテリー残量[Wh]
-    //data->remainBatteryParcent = (data->remainBatteryWh / BATTERY_CAPACITY) * 100;    // バッテリー残量[%]
+    // data->remainBatteryParcent = (data->remainBatteryWh / BATTERY_CAPACITY) * 100;    // バッテリー残量[%]
     data->gpsSpeed = myGPS.speed * NOTS_CONVERT;  // GPS速度
-    data->gpsAngle = myGPS.angle;  //進行方向
-    data->latitude = myGPS.latitude;     // GPS緯度
-    data->longitude = myGPS.longitude;   // GPS経度
+    data->gpsAngle = myGPS.angle;                 //進行方向
+    data->latitude = myGPS.latitude;              // GPS緯度
+    data->longitude = myGPS.longitude;            // GPS経度
 
     data->motorSpeed = data->motorRPM * RPM_CONVERT;  //モータ速度
     data->distanceMotorSpeed += data->motorRPM * RPM_CONVERT_MS / 1000;  //走行距離
@@ -603,59 +653,123 @@ void XbeeSerial(const struct LogData *data){
 
 /*LCDへのデータ表示を行う locate関数は0行0列からはじまり，引数は(列，行)*/
 void LCD(const struct LogData *data){
-  /*if(data->motorTemp > MOTOR_OVER_TEMP) {
+  lcd.locate(0, 0);
+  lcd.printf("%s", data->timeStr[1]);
+  lcd.locate(11, 0);
+  lcd.printf("%3.0f", data->motorSpeed);  //「motorSpeed」→「motorSpeed_pulse」→「motorSpeed」パルスは使わない方針で考える
+  lcd.locate(15, 0);
+  lcd.printf("km/h");
+
+  lcd.locate(0, 1);
+  lcd.printf("%6.1f", data->remainBatteryWh);  //％表記からWhへ、Whでみんな分かるはず
+  lcd.locate(6, 1);
+  lcd.printf("Wh");
+  lcd.locate(10, 1);
+  lcd.printf("B");
+  lcd.locate(12, 1);
+  lcd.printf("%5.2f", data->RealtimeData[0][0]);
+  lcd.locate(18, 1);
+  lcd.printf("A");
+
+  lcd.locate(1, 2);
+  lcd.printf("%5.1f", data->batteryVoltage);
+  lcd.locate(7, 2);
+  lcd.printf("V");
+  lcd.locate(10, 2);
+  lcd.printf("P");
+  lcd.locate(12, 2);
+  lcd.printf("%5.2f", data->RealtimeData[1][0]);
+  lcd.locate(18, 2);
+  lcd.printf("A");
+
+  lcd.locate(0, 3);
+  lcd.printf("%6.1f", data->distanceMotorSpeed);
+  lcd.locate(6, 3);
+  lcd.printf("km");
+  lcd.locate(10, 3);
+  lcd.printf("M");
+  lcd.locate(12, 3);
+  lcd.printf("%5.2f", data->RealtimeData[2][0]);
+  lcd.locate(18, 3);
+  lcd.printf("A");
+
+  // BMS 通信成功インジケータ
+  if(BMSConnectFlag){
+    BMSConnectFlag = false;
+    lcd.locate(19, 3);
+    lcd.printf("*");  // 「*」を表示
+  }
+  else{
+    lcd.locate(19, 3);
+    lcd.printf(" ");  // 「*」消去
+  }
+}
+
+void DisplayBMSError(){
+  if(BMSErrorFlagOverCharge){
+    BMSErrorFlagOverCharge = false;
     lcd.cls();
     lcd.locate(3, 1);
-    lcd.printf("MOTOR OVERTEMP");
-    wait(0.5);
-    lcd.cls();
-  }*/
-//  else{
-    lcd.locate(0, 0);
-    lcd.printf("%s", data->timeStr[1]);
-    lcd.locate(11, 0);
-    lcd.printf("%3.0f", data->motorSpeed);  //「motorSpeed」→「motorSpeed_pulse」→「motorSpeed」パルスは使わない方針で考える
-    lcd.locate(15, 0);
-    lcd.printf("km/h");
-
-    lcd.locate(0, 1);
-    lcd.printf("%6.1f", data->remainBatteryWh);  //％表記からWhへ、Whでみんな分かるはず
-    lcd.locate(6, 1);
-    lcd.printf("Wh");
-    lcd.locate(10, 1);
-    lcd.printf("B");
-    lcd.locate(12, 1);
-    lcd.printf("%5.2f", data->RealtimeData[0][0]);
-    lcd.locate(18, 1);
-    lcd.printf("A");
-
-    lcd.locate(1, 2);
-    lcd.printf("%5.1f", data->batteryVoltage);
-    lcd.locate(7, 2);
-    lcd.printf("V");
+    lcd.printf("BATTERY");
+    lcd.locate(11, 1);
+    lcd.printf("ERORR!");
+    lcd.locate(4, 2);
+    lcd.printf("OVER");
     lcd.locate(10, 2);
-    lcd.printf("P");
-    lcd.locate(12, 2);
-    lcd.printf("%5.2f", data->RealtimeData[1][0]);
-    lcd.locate(18, 2);
-    lcd.printf("A");
-
-    lcd.locate(0, 3);
-    lcd.printf("%5.1f", data->distanceMotorSpeed);
-    lcd.locate(6, 3);
-    lcd.printf("km");
-    lcd.locate(10, 3);
-    lcd.printf("M");
-    lcd.locate(12, 3);
-    lcd.printf("%5.2f", data->RealtimeData[2][0]);
-    lcd.locate(18, 3);
-    lcd.printf("A");
-//  }
+    lcd.printf("CHARGE");
+    wait(3.0);
+    lcd.cls();
+    BMSErrorFlag = false;
+  }
+  if(BMSErrorFlagOverDischarge){
+    BMSErrorFlagOverCharge = false;
+    lcd.cls();
+    lcd.locate(3, 1);
+    lcd.printf("BATTERY");
+    lcd.locate(11, 1);
+    lcd.printf("ERORR!");
+    lcd.locate(3, 2);
+    lcd.printf("OVER");
+    lcd.locate(8, 2);
+    lcd.printf("DISCHARGE");
+    wait(3.0);
+    lcd.cls();
+    BMSErrorFlag = false;
+  }
+  if(BMSErrorFlagOverTemp){
+    BMSErrorFlagOverTemp = false;
+    lcd.cls();
+    lcd.locate(3, 1);
+    lcd.printf("BATTERY");
+    lcd.locate(11, 1);
+    lcd.printf("ERORR!");
+    lcd.locate(4, 2);
+    lcd.printf("OVER");
+    lcd.locate(11, 2);
+    lcd.printf("TEMP");
+    wait(3.0);
+    lcd.cls();
+    BMSErrorFlag = false;
+  }
+  if(BMSErrorFlagLowTemp){
+    BMSErrorFlagLowTemp = false;
+    lcd.cls();
+    lcd.locate(3, 1);
+    lcd.printf("BATTERY");
+    lcd.locate(11, 1);
+    lcd.printf("ERORR!");
+    lcd.locate(4, 2);
+    lcd.printf("LOW");
+    lcd.locate(11, 2);
+    lcd.printf("TEMP");
+    wait(3.0);
+    lcd.cls();
+    BMSErrorFlag = false;
+  }
 }
 
 /*構造体のデータをUSBメモリへデータを保存(csvファイル)*/
 int USBSaveData(const struct LogData *data, const char name[][FILE_NAME_MAX]){
-  int i, j;
   FILE *fp = fopen(name[0], "a");
 
   if(fp == NULL) {
@@ -664,8 +778,8 @@ int USBSaveData(const struct LogData *data, const char name[][FILE_NAME_MAX]){
   }
   else{
     fprintf(fp, "%s,%d,%.2f", data->timeStr[1], data->totalTimeNoon, data->batteryVoltage);
-    for(j = 0; j < RealtimeData_j; j++) {
-      for(i = 0; i < RealtimeData_i; i++) {
+    for(int j = 0; j < RealtimeData_j; j++) {
+      for(int i = 0; i < RealtimeData_i; i++) {
         fprintf(fp, ",%.2f", data->RealtimeData[i][j]);  // 全データ
       }
     }
@@ -699,28 +813,28 @@ int USBSaveCANData(const struct LogData *data, const char name[][FILE_NAME_MAX])
   }
 
   // SOLARLOGGER
-  fp = fopen(name[3], "a");
-  if(fp == NULL){
-    fclose(fp);
-    return -1;
-  }
-  else{
-    fprintf(fp, "%s,%d", data->timeStr[1], data->totalTimeNoon);
-    for(int i = 0; i < 12; i++){
-      fprintf(fp, ",%.2f", data->SOLARLOGGERVoltage[i]);
-    }
-    for(int i = 0; i < 12; i++){
-      fprintf(fp, ",%.2f", data->SOLARLOGGERCurrent[i]);
-    }
-    for(int i = 0; i < 12; i++){
-      fprintf(fp, ",%.2f", data->SOLARLOGGERPower[i]);
-    }
-    for(int i = 0; i < 16; i++){
-      fprintf(fp, ",%.1f", data->SOLARLOGGERTemp[i]);
-    }
-    fprintf(fp, "\n");
-    fclose(fp);
-  }
+  // fp = fopen(name[3], "a");
+  // if(fp == NULL){
+  //   fclose(fp);
+  //   return -1;
+  // }
+  // else{
+  //   fprintf(fp, "%s,%d", data->timeStr[1], data->totalTimeNoon);
+  //   for(int i = 0; i < 12; i++){
+  //     fprintf(fp, ",%.2f", data->SOLARLOGGERVoltage[i]);
+  //   }
+  //   for(int i = 0; i < 12; i++){
+  //     fprintf(fp, ",%.2f", data->SOLARLOGGERCurrent[i]);
+  //   }
+  //   for(int i = 0; i < 12; i++){
+  //     fprintf(fp, ",%.2f", data->SOLARLOGGERPower[i]);
+  //   }
+  //   for(int i = 0; i < 16; i++){
+  //     fprintf(fp, ",%.1f", data->SOLARLOGGERTemp[i]);
+  //   }
+  //   fprintf(fp, "\n");
+  //   fclose(fp);
+  // }
 
   // BMS
   fp = fopen(name[4], "a");
@@ -774,46 +888,47 @@ int SaveBackup(const struct LogData *data){
 //パルスは使わない方針で考えるのでバン
 
 void SendCANMessage(){
-  const uint32_t REQUEST_ID_LIST[] = {0x08F89540, 0xA0, 0xA1, 0xB0};  // 拡張IDなので32bitで宣言
-  const uint8_t REQUEST_DATA_LIST[] = {0x01, 0x06, 0x06, 0x01};
-  const int CMD_LIST_LENGTH = 4;
+  const uint32_t REQUEST_ID_LIST = 0x08F89540;
+  const uint8_t REQUEST_DATA_LIST = 0x01;
 
-  for(int i = 0; i < CMD_LIST_LENGTH; i++){
-    CANMessage sendMsg;
-    sendMsg.id = REQUEST_ID_LIST[i];
-    sendMsg.data[0] = REQUEST_DATA_LIST[i];
-    sendMsg.len = 1;
-    sendMsg.type = CANData;
-    sendMsg.format = CANExtended;
-
-    canBusSystem.write(sendMsg);
-
-    wait_ms(10);  // 通信時間によって要調整
-  }
+  CANMessage sendMsg;
+  sendMsg.id = REQUEST_ID_LIST;
+  sendMsg.data[0] = REQUEST_DATA_LIST;
+  sendMsg.len = 8;
+  sendMsg.type = CANData;
+  sendMsg.format = CANExtended;
+  
+  canBusSystem.write(sendMsg);
+  // debug.printf("send_id:%x, send_data:%x\n", sendMsg.id, sendMsg.data[1]);
 }
 
 void ReceiveCANMessage(){
   CalculateSet_CAN(&logdata);
-  DisplayBMSError();
 }
 
 void CalculateSet_CAN(struct LogData *data){
-  const double SOL_VOLTAGE_LSB = 0.01953125;
-  const double SOL_CURRENT_LSB = 0.0048828125;
-  const double SOL_TEMP_LSB = 0.48828125;
-  const double BMS_VOLTAGE_LSB = 0.0001;
+  // const double SOL_VOLTAGE_LSB = 0.01953125;
+  // const double SOL_CURRENT_LSB = 0.0048828125;
+  // const double SOL_TEMP_LSB = 0.48828125;
+  const double BMS_VOLTAGE_LSB = 0.0001;  // BMS セル電圧の1LSB
 
   const uint32_t RECEIVE_ID_MITSUBA[] = {0x08850225, 0x08950225, 0x08A50225};  // FRAME0, FRAME1, FRAME2
-  const uint32_t RECEIVE_ID_SOLAR_1[] = {0x10, 0x20, 0x30};
-  const uint32_t RECEIVE_ID_SOLAR_2[] = {0x11, 0x21, 0x31};
+  // const uint32_t RECEIVE_ID_SOLAR_1[] = {0x10, 0x20, 0x30};
+  // const uint32_t RECEIVE_ID_SOLAR_2[] = {0x11, 0x21, 0x31};
   const uint32_t RECEIVE_ID_BMS[] = {0x40, 0x41, 0x42, 0x43, 0x44, 0x45, 0x46, 0x47};
-  
+
+  const uint32_t RECEIVE_ID_BMS_ERROER = 0x00;
+  const uint8_t FLAG_OVER_DISCHARGE = 0x01; // 0001
+  const uint8_t FLAG_OVER_CHARGE = 0x02;    // 0010
+  const uint8_t FLAG_OVER_TEMP = 0x04;      // 0100
+  const uint8_t FLAG_LOW_TEMP = 0x08;       // 1000
+
   double motorVoltage_temp = 0;
 
   CANMessage msg;
   if(canBusSystem.read(msg)){
+    // debug.printf("\nreceive_id:%x receive_data:%x\n", msg.id, msg.data[0]);
     // MITSUBA FRAME0
-    debug.printf("%x\n", msg.id);
     if(msg.id == RECEIVE_ID_MITSUBA[0]){
       motorVoltage_temp = (double)((((((uint16_t)msg.data[1]) & 0x0003) << 8) | (((uint16_t)msg.data[0]) & 0x00ff))) * 0.5;
       data->motorVoltage = motorVoltage_temp * MITSUBA_VOLTAGE_CALIB;
@@ -823,7 +938,8 @@ void CalculateSet_CAN(struct LogData *data){
       data->duty = (double)(((((uint16_t)msg.data[5]) & 0x0080) >> 7) | ((((uint16_t)msg.data[6]) & 0x00ff) << 1) | ((((uint16_t)msg.data[7]) & 0x0001) << 9)) * 0.5;
       data->angle = (double)((((uint16_t)msg.data[7]) & 0x00fe) >> 1) * 0.5;
     }
-
+    
+    /*
     // SOLARLOGGER 1 Voltage
     if(msg.id == RECEIVE_ID_SOLAR_1[0]){
       data->SOLARLOGGERVoltage[0] = (double)(((uint16_t)msg.data[0]) | ((uint16_t)msg.data[1] & 0x03) << 8) * SOL_VOLTAGE_LSB;
@@ -882,11 +998,13 @@ void CalculateSet_CAN(struct LogData *data){
         data->SOLARLOGGERTemp[i] = (double)(msg.data[i] * SOL_TEMP_LSB);
       }
     }
+    */
 
     // BMS 最小・最大・合計バッテリセル電圧
     if(msg.id == RECEIVE_ID_BMS[0]){
+      BMSConnectFlag = true;
       data->minCellVoltage = (double)(((uint16_t)msg.data[0]) | ((uint16_t)msg.data[1]) << 8) * BMS_VOLTAGE_LSB;
-      data->maxCellVoltage = (double)(((uint16_t)msg.data[2]) | ((uint16_t)msg.data[2]) << 8) * BMS_VOLTAGE_LSB;
+      data->maxCellVoltage = (double)(((uint16_t)msg.data[2]) | ((uint16_t)msg.data[3]) << 8) * BMS_VOLTAGE_LSB;
       data->sumBatteryVoltage = (double)(((uint16_t)msg.data[4]) | ((uint16_t)msg.data[5] << 8) | ((uint16_t)msg.data[6] << 16)) * BMS_VOLTAGE_LSB;
     }
 
@@ -898,41 +1016,54 @@ void CalculateSet_CAN(struct LogData *data){
         }
       }
     }
-  }
-}
 
-void DisplayBMSError(){
-  const uint32_t RECEIVE_ID_BMS = 0x00;
-
-  const uint8_t FLAG_OVER_DISCHARGE = 0x01;  // 001
-  const uint8_t FLAG_OVER_CHARGE = 0x02;  // 010
-  const uint8_t FLAG_OVER_TEMP = 0x04;  // 100
-
-  CANMessage msgError;
-  if(canBusSystem.read(msgError)){
-    debug.printf("BMSError id %x\n", msgError.id);
-    if(msgError.id == RECEIVE_ID_BMS){
-      if(msgError.data[0] & FLAG_OVER_DISCHARGE){
-        lcd.cls();
-        lcd.locate(3, 1);
-        lcd.printf("BMS ERORR");  // メッセージは仮 データの種類によってメッセージ変更
-        wait(1.0);
-        lcd.cls();
+    // Battery Error用
+    if (msg.id == RECEIVE_ID_BMS_ERROER){
+      BMSConnectFlag = true;  // BMS 通信成功フラグ
+      if (msg.data[0] & FLAG_OVER_DISCHARGE){
+        BMSErrorFlag = true;  // BMS エラー表示フラグ
+        BMSErrorFlagOverDischarge = true;  // 過充電
       }
-      if(msgError.data[0] & FLAG_OVER_CHARGE){
-        lcd.cls();
-        lcd.locate(3, 1);
-        lcd.printf("BMS ERORR");  // メッセージは仮 データの種類によってメッセージ変更
-        wait(1.0);
-        lcd.cls();
+      if (msg.data[0] & FLAG_OVER_CHARGE){
+        BMSErrorFlag = true; // BMS エラー表示フラグ
+        BMSErrorFlagOverCharge = true;  // 過放電
       }
-      if(msgError.data[0] & FLAG_OVER_TEMP){
-        lcd.cls();
-        lcd.locate(3, 1);
-        lcd.printf("BMS ERORR");  // メッセージは仮 データの種類によってメッセージ変更
-        wait(1.0);
-        lcd.cls();
+      if (msg.data[0] & FLAG_OVER_TEMP){
+        BMSErrorFlag = true; // BMS エラー表示フラグ
+        BMSErrorFlagOverTemp = true;  // 過温度
+      }
+      if (msg.data[0] & FLAG_LOW_TEMP){
+        BMSErrorFlag = true; // BMS エラー表示フラグ
+        BMSErrorFlagLowTemp = true;  // 過低温
       }
     }
   }
 }
+
+double MoD0(double vaLue)//バッテリー電圧
+{
+    
+  return (vaLue*10);    
+    
+}     
+
+double MoD1(double vaLue)//バッテリー電流
+{
+    
+  return ((vaLue-2.510)*40);    
+    
+}     
+
+double MoD2(double vaLue)//パネル電流
+{
+    
+  return ((vaLue-2.507)*40);   ;    
+    
+}     
+
+double MoD3(double vaLue)//モーター電流
+{
+    
+  return ((vaLue-2.5025)*40);   ;    
+    
+}     
