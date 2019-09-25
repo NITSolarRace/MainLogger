@@ -26,9 +26,9 @@ lcd表示のmotorSpeedをmotorSpeed_pulseに変更624行目（lcd :: can速度→パルス速度）
  */
 /*
 * 2019/09/21
-* CAN通信　BMS　バッテリエラー表示対応
+* CAN通信 BMS バッテリエラー表示対応
 * BMSからバッテリ異常情報・合計電圧、最小電圧、最大電圧のフレーム１秒間隔で送信
-* 受信割り込みで処理　DisplayBMSError()
+* 受信割り込みで処理 DisplayBMSError()
 * SOLARLOGGER保存用プログラムコメントアウト
 */
 
@@ -49,13 +49,13 @@ const unsigned short INA226_CONFIG = 0x4897;    // 平均化処理やタイミング
 /*------------------------------設定変更厳禁------------------------------*/
 // const double VOLTAGE_CALIB = 10 * 1.0016;         // 分圧比(10倍に補正)
 const double MITSUBA_VOLTAGE_CALIB = 0.93396;     // ミツバCANlogger 電圧補正 誤差0.7%程度へ
-// const unsigned short INA226_CALIB = 0xF00;      // シャント電圧補正係数
-// const unsigned short INA226_CALIB_PANEL = 0x3555; // シャント電圧補正係数（パネル）
+const unsigned short INA226_CALIB = 0xF00;      // シャント電圧補正係数
+const unsigned short INA226_CALIB_PANEL = 0x3555; // シャント電圧補正係数（パネル）
 // const double currentCalibration[] = {2.00, 0.375, 2.00};
 // [0]: バッテリ [1]: パネル [2]: モータ
 /*------------------------------設定変更厳禁------------------------------*/
 const double BATTERY_CAPACITY = 3.6 * 3.45 * 26 * 16;       // 公称電圧*電流容量*直列数*並列数
-const double MOTOR_OVER_TEMP = 150;  // コイル温度150℃で過温度
+// const double MOTOR_OVER_TEMP = 150;  // コイル温度150℃で過温度
 
 // const int OFFSET_TIME = 60 * 60 * 9;     // 9時間(標準時との時差) = 日本時間
 const int OFFSET_TIME = 60 * 60 * 9.5;     // ダーウィン時間
