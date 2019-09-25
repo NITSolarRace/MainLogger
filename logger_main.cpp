@@ -227,9 +227,9 @@ int main(){
   // メインループ
   while(1) {
     FetchGPSdata(fileName);
+    // 1秒ごとに実行
     if(secTimer) {
       secTimer = false;
-      // USB保存関連 1秒ごと
       if(USBSaveData(&logdata, fileName) == -1) {
         print("USB  ERROR!", 5, 1);
         wait(0.5);
@@ -246,10 +246,12 @@ int main(){
         break;
       }
     }
+    // STORAGE_TIMEごとに実行
     if(storageCount >= STORAGE_TIME) {
       storageCount = 0;
       XbeeSerial(&logdata);
     }
+    // BMS警告時
     if(BMSErrorFlag){
       DisplayBMSError();
     }
@@ -263,7 +265,7 @@ void MainFuncTimer() {
   CalculateTimeSet(&logdata);
   CalculateSet(&logdata, true);
 
-  // BMS異常でないなら通常ディスプレイ表示
+  // BMS警告でないなら通常ディスプレイ表示
   if(!BMSErrorFlag){
     LCD(&logdata);
   }
@@ -625,20 +627,25 @@ void XbeeSerial(const struct LogData *data){
   for(int i = 0; i < RealtimeData_i; i++) {
     snprintf(SerialSendStr, SERIAL_MAX, "%s,%.2f", SerialSendStr, data->RealtimeData[i][0]);
   }
+
   // 電力
   for(int i = 0; i < RealtimeData_i; i++) {
     snprintf(SerialSendStr, SERIAL_MAX, "%s,%.2f", SerialSendStr, data->RealtimeData[i][1]);
   }
 
-  snprintf(SerialSendStr, SERIAL_MAX, "%s,%.1f,%.2f,%.1f", SerialSendStr,
-            data->motorSpeed,
-            data->remainBatteryWh,
-            //data->remainBatteryParcent,
-            data->motorTemp);
   // 積算電力
   for(int i = 0; i < RealtimeData_i; i++) {
     snprintf(SerialSendStr, SERIAL_MAX, "%s,%.2f", SerialSendStr, data->RealtimeData[i][3]);
   }
+
+  snprintf(SerialSendStr, SERIAL_MAX, "%s,%.1f,%.1f,%.2f,%.2f,%.2f,%.2f", SerialSendStr,
+           data->motorSpeed,
+           data->motorTemp,
+           data->remainBatteryWh,
+           data->sumBatteryVoltage,
+           data->minCellVoltage,
+           data->maxCellVoltage);
+
   // 平均電力
   /* for(int i = 0; i < RealtimeData_i; i++) {
     snprintf(SerialSendStr, SERIAL_MAX, "%s,%.2f", SerialSendStr,  data->RealtimeData[i][5]);
@@ -648,7 +655,7 @@ void XbeeSerial(const struct LogData *data){
             data->distanceMotorSpeed,
             data->gpsSpeed);//「gpsSpeed」→「motorSpeed_pulse」→「gpsSpeed」パルスは使わない方針で考える
 
-  Xbee.printf("%s\r\n", SerialSendStr);  // 改行コード変更　\n → \r\n
+  Xbee.printf("%s\r\n", SerialSendStr);  // 改行コード変更 \n → \r\n
 }
 
 /*LCDへのデータ表示を行う locate関数は0行0列からはじまり，引数は(列，行)*/
@@ -844,10 +851,10 @@ int USBSaveCANData(const struct LogData *data, const char name[][FILE_NAME_MAX])
   }
   else{
     fprintf(fp, "%s,%d", data->timeStr[1], data->totalTimeNoon);
-    fprintf(fp, ",%.4f,%.4f,%.4f", data->minCellVoltage, data->maxCellVoltage, data->sumBatteryVoltage);
-    for(int i = 0; i < 28; i++){
-      fprintf(fp, ",%.4f", data->cellVoltage[i]);
-    }
+    fprintf(fp, ",%.4f,%.4f,%.4f", data->sumBatteryVoltage, data->minCellVoltage, data->maxCellVoltage);
+    // for(int i = 0; i < 28; i++){
+    //   fprintf(fp, ",%.4f", data->cellVoltage[i]);
+    // }
     fprintf(fp, "\n");
     fclose(fp);
   }
@@ -1008,14 +1015,14 @@ void CalculateSet_CAN(struct LogData *data){
       data->sumBatteryVoltage = (double)(((uint16_t)msg.data[4]) | ((uint16_t)msg.data[5] << 8) | ((uint16_t)msg.data[6] << 16)) * BMS_VOLTAGE_LSB;
     }
 
-    // BMS 各セル電圧
-    for(int i = 1; i < 8; i++){
-      if(msg.id == RECEIVE_ID_BMS[i]){
-        for(int j = 4 * (i - 1); j < 4 * i; j++){
-          data->cellVoltage[j] = (double)(((uint16_t)msg.data[2 * (j % 4)]) | ((uint16_t)msg.data[2 * (j % 4) + 1] << 8)) * BMS_VOLTAGE_LSB;
-        }
-      }
-    }
+    // // BMS 各セル電圧
+    // for(int i = 1; i < 8; i++){
+    //   if(msg.id == RECEIVE_ID_BMS[i]){
+    //     for(int j = 4 * (i - 1); j < 4 * i; j++){
+    //       data->cellVoltage[j] = (double)(((uint16_t)msg.data[2 * (j % 4)]) | ((uint16_t)msg.data[2 * (j % 4) + 1] << 8)) * BMS_VOLTAGE_LSB;
+    //     }
+    //   }
+    // }
 
     // Battery Error用
     if (msg.id == RECEIVE_ID_BMS_ERROER){
