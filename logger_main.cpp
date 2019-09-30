@@ -444,6 +444,8 @@ int SetupUSB(struct LogData *data, char name[][FILE_NAME_MAX]){
     fprintf(fp, "%s\n", HEADER_CAN_BMS);   // ƒwƒbƒ_[‘‚«‚İ
   }
   fclose(fp);
+
+  print("USB OK!\n", 0, 3);
   
   return 0;
 }
