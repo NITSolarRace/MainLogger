@@ -134,11 +134,11 @@ struct LogData {
   double duty;          // MITSUBA CAN duty比
   double angle;         // MITSUBA CAN 進角
 
-  // CAN SOLARLOGGER
-  double SOLARLOGGERVoltage[12];  // MPPT入力電圧1-12ch
-  double SOLARLOGGERCurrent[12];  // MPPT入力電流1-12ch
-  double SOLARLOGGERPower[12];    // MPPT入力電力1-12ch（電圧×電流の演算）
-  double SOLARLOGGERTemp[16];     // アレイ温度16ch
+  // // CAN SOLARLOGGER
+  // double SOLARLOGGERVoltage[12];  // MPPT入力電圧1-12ch
+  // double SOLARLOGGERCurrent[12];  // MPPT入力電流1-12ch
+  // double SOLARLOGGERPower[12];    // MPPT入力電力1-12ch（電圧×電流の演算）
+  // double SOLARLOGGERTemp[16];     // アレイ温度16ch
 
   // CAN BMS
   double sumBatteryVoltage;   // BMS合計バッテリセル電圧
