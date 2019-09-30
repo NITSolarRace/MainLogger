@@ -41,17 +41,17 @@ lcd表示のmotorSpeedをmotorSpeed_pulseに変更624行目（lcd :: can速度→パルス速度）
 
 // INA226用I2Cアドレス I2Cアドレスはmbedの場合1ビット左シフトしたアドレスになる
 const int BATTERY_MONITOR_ADDRESS = 0x80;         // 0b10000000 (GG)
-const int BATTERY_MON2_ADDRESS = 0x94;             // 0b10010100 (DD) 
+// const int BATTERY_MON2_ADDRESS = 0x94;             // 0b10010100 (DD) 
 const int PANEL_MONITOR_ADDRESS = 0x82;           // 0b10000010 (G1)
 const int MOTOR_MONITOR_ADDRESS = 0x9E;           // 0b10011110 (CC)
 const unsigned short INA226_CONFIG = 0x4897;    // 平均化処理やタイミング
 
 /*------------------------------設定変更厳禁------------------------------*/
-// const double VOLTAGE_CALIB = 10 * 1.0016;         // 分圧比(10倍に補正)
+const double VOLTAGE_CALIB = 10;                  // 分圧比(10倍に補正)
 const double MITSUBA_VOLTAGE_CALIB = 0.93396;     // ミツバCANlogger 電圧補正 誤差0.7%程度へ
-const unsigned short INA226_CALIB = 0xF00;      // シャント電圧補正係数
+const unsigned short INA226_CALIB = 0xF00;        // シャント電圧補正係数
 const unsigned short INA226_CALIB_PANEL = 0x3555; // シャント電圧補正係数（パネル）
-// const double currentCalibration[] = {2.00, 0.375, 2.00};
+const double currentCalibration[] = {2.00, 0.375, 2.00};
 // [0]: バッテリ [1]: パネル [2]: モータ
 /*------------------------------設定変更厳禁------------------------------*/
 const double BATTERY_CAPACITY = 3.6 * 3.45 * 26 * 16;       // 公称電圧*電流容量*直列数*並列数
@@ -97,7 +97,7 @@ I2C i2c(p9, p10);  // sda, scl
 INA226 BatteryMonitor(i2c, BATTERY_MONITOR_ADDRESS, 10000);
 INA226 PanelMonitor(i2c, PANEL_MONITOR_ADDRESS, 10000);
 INA226 MotorMonitor(i2c, MOTOR_MONITOR_ADDRESS, 10000);
-INA226 BatteryMonitor2(i2c, BATTERY_MON2_ADDRESS, 10000);
+// INA226 BatteryMonitor2(i2c, BATTERY_MON2_ADDRESS, 10000);
 
 MSCFileSystem msc("usb");  // USBメモリには/usb/...でアクセス
 
@@ -307,10 +307,10 @@ int SetupINA226(){
      wait(0.5);
     return -1;
   }
- if(!BatteryMonitor2.isExist()) {
-    print("INA226B not found!\n", 0, 0);
-    wait(0.5);
-  }
+//  if(!BatteryMonitor2.isExist()) {
+//     print("INA226B not found!\n", 0, 0);
+//     wait(0.5);
+//   }
   // INA226のレジスタの値を正しく読めるか確認
   if(BatteryMonitor.rawRead(0x00, &val_1) != 0) {
     print("INA226B read Error!\n", 0, 0);
@@ -327,21 +327,21 @@ int SetupINA226(){
     wait(0.5);
     return -1;
   }
-  if(BatteryMonitor2.rawRead(0x00, &val_1) != 0) {
-    print("INA226B2 read Error!\n", 0, 0);
-    wait(0.5);
-    return -1;
-}
+  // if(BatteryMonitor2.rawRead(0x00, &val_1) != 0) {
+  //   print("INA226B2 read Error!\n", 0, 0);
+  //   wait(0.5);
+  //   return -1;
+  // }
   // 各INA226にレジスタ値を書き込む
   BatteryMonitor.setConfiguration(INA226_CONFIG);
   PanelMonitor.setConfiguration(INA226_CONFIG);
   MotorMonitor.setConfiguration(INA226_CONFIG);
-  BatteryMonitor2.setConfiguration(INA226_CONFIG);
+  // BatteryMonitor2.setConfiguration(INA226_CONFIG);
   
   BatteryMonitor.setCurrentCalibration(INA226_CALIB);
   PanelMonitor.setCurrentCalibration(INA226_CALIB_PANEL);
   MotorMonitor.setCurrentCalibration(INA226_CALIB);
-  BatteryMonitor2.setCurrentCalibration(INA226_CALIB);
+  // BatteryMonitor2.setCurrentCalibration(INA226_CALIB);
 
   print("INA226 OK!\n", 0, 0);
   return 0;
@@ -548,38 +548,39 @@ void CalculateSet(struct LogData *data, bool run){
 
   double voltage_tmp = 0;      // 仮に電圧,電流データを保存しておく
   double current_tmp[RealtimeData_i] = {0};
-  double vAl[4] = {0};
+  // double vAl[4] = {0};
 
   // 異常な値の場合は，再度データを取り直す
   do {
     retry = false;
     
-    BatteryMonitor2.getVoltage(&vAl[0]);     // バッテリー電圧
-    BatteryMonitor.getVoltage(&vAl[1]); // バッテリー電流
-    PanelMonitor.getVoltage(&vAl[2]);   // パネル電流
-    MotorMonitor.getVoltage(&vAl[3]);   // モーター電流
+    // BatteryMonitor2.getVoltage(&vAl[0]);     // バッテリー電圧
+    // BatteryMonitor.getVoltage(&vAl[1]); // バッテリー電流
+    // PanelMonitor.getVoltage(&vAl[2]);   // パネル電流
+    // MotorMonitor.getVoltage(&vAl[3]);   // モーター電流
     
-    current_tmp[0] = MoD1(vAl[1]);    // バッテリー電流変換後の値をcurrent_tmp[0]に代入fx0かかないと
-    current_tmp[1] = MoD2(vAl[2]);    //同上
-    current_tmp[2] = MoD3(vAl[3]);    //同上
-    voltage_tmp = MoD0(vAl[0]);       //同上
-    
-   //data->motorSpeed_pulse = pulseCount * pulseConvert;     // 1秒間でカウントしたパルスを速度に変換
-   // pulseCount = 0;//パルスのリセット
-   //↑パルスは使わないとしている
+    // current_tmp[0] = MoD1(vAl[1]);    // バッテリー電流変換後の値をcurrent_tmp[0]に代入fx0かかないと
+    // current_tmp[1] = MoD2(vAl[2]);    //同上
+    // current_tmp[2] = MoD3(vAl[3]);    //同上
+    // voltage_tmp = MoD0(vAl[0]);       //同上
 
+    BatteryMonitor.getVoltage(&voltage_tmp);     // 電圧
+    BatteryMonitor.getCurrent(&current_tmp[0]); // バッテリー電流
+    PanelMonitor.getCurrent(&current_tmp[1]);   // パネル電流
+    MotorMonitor.getCurrent(&current_tmp[2]);   // モーター電流
+    
     if(voltage_tmp > 150) retry = true;         // 電圧が150V以上は異常
     for(int i = 0; i < RealtimeData_i; i++) {
-      if(current_tmp[i] > 60) retry = true;    // 電流が60A以上は異常
+      if(current_tmp[i] > 100) retry = true;    // 電流が100A以上は異常
     }
     count++;
   } while(retry && count < 5);  // 5回とっても異常な場合はさすがにループを抜ける
 
   // 0割の有無を確認した後，配列に格納する
   if(data->totalTime != 0) {
-    data->batteryVoltage = voltage_tmp; // 分圧電圧を補正
+    data->batteryVoltage = voltage_tmp * VOLTAGE_CALIB; // 分圧電圧を補正
     for(int i = 0; i < RealtimeData_i; i++) {
-      data->RealtimeData[i][0] = current_tmp[i];  // 電流
+      data->RealtimeData[i][0] = current_tmp[i] * currentCalibration[i];  // 電流
       data->RealtimeData[i][1] = data->batteryVoltage * data->RealtimeData[i][0];   // 電力
       if(run) {
         //data->RealtimeData[i][2] += data->RealtimeData[i][0] / 3600;            // 積算電流
